@@ -1,6 +1,6 @@
 # RockmanEXE-NetNavi-Assistant
 
-
+~~~
 import os
 import sys
 import glob
@@ -204,6 +204,7 @@ if __name__ == "__main__":
     setup_virtual_environment()
     run_script()
 
+~~~
 
 RockmanEXE-NetNavi-Assistant is a Python-based, voice-activated AI assistant inspired by the NetNavis from the Megaman.EXE universe. It uses speech recognition, sentiment analysis, and text-to-speech to engage in natural, voice-driven interactions. The assistant provides context-aware responses, can set reminders, discuss the weather, and remain active until you say "exit" or a similar command. It’s an early-stage prototype aiming to emulate a NetNavi-like companion experience.
 
