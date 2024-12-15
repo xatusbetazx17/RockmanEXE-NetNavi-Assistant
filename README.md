@@ -672,7 +672,7 @@ Copy code
 }
 
 ```
-  ## Real wordls models
+  ## Real World Models
 
 ## medical_advisor.json (Medical Professional Persona)
 
