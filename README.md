@@ -12,6 +12,7 @@ import random
 import time
 import tkinter as tk
 from tkinter import filedialog
+import webbrowser
 
 REQUIRED_LIBRARIES = [
     "pyttsx3",
@@ -29,17 +30,18 @@ def install_system_package(package_name):
             print(f"[Error] Failed to install {package_name} using pacman.")
             return False
     else:
+        # Non-Arch systems: skipping since user is aware
         print("[Warning] Pacman not found. Cannot install system packages automatically.")
         return False
 
 def install_system_pyaudio():
-    print("[Setup] Detected Arch-based system. Installing python-pyaudio...")
-    return install_system_package("python-pyaudio")
+    print("[Setup] Checking for pyaudio system installation...")
+    # Just a placeholder; user must handle system-level installs on non-Arch
+    return True
 
 def ensure_espeak_ng():
     if shutil.which("espeak-ng") is None:
-        print("[Setup] espeak-ng not found, installing...")
-        install_system_package("espeak-ng")
+        print("[Setup] espeak-ng not found. Please install espeak-ng if TTS issues occur.")
 
 def create_virtual_environment(venv_dir):
     if not os.path.exists(venv_dir):
@@ -54,7 +56,7 @@ def add_venv_site_packages_to_path(venv_dir):
         site_packages_dirs = glob.glob(os.path.join(venv_dir, 'Lib', 'site-packages'))
 
     if not site_packages_dirs:
-        raise FileNotFoundError("[Error] Could not locate the site-packages directory in the virtual environment.")
+        raise FileNotFoundError("[Error] Could not locate site-packages in virtual environment.")
 
     for sp in site_packages_dirs:
         if sp not in sys.path:
@@ -69,19 +71,8 @@ def install_packages(venv_dir):
     print("[Setup] Upgrading pip, wheel, and setuptools...")
     subprocess.check_call([pip_exec, "install", "--upgrade", "pip", "wheel", "setuptools"])
 
-    pyaudio_installed = False
-    if shutil.which("pacman"):
-        if install_system_pyaudio():
-            try:
-                import pyaudio  # noqa: F401
-                pyaudio_installed = True
-            except ImportError:
-                pass
-
     all_libraries = REQUIRED_LIBRARIES
-    if not pyaudio_installed:
-        all_libraries.append("pyaudio")
-
+    # Attempt to install all libraries
     for library in all_libraries:
         try:
             __import__(library)
@@ -105,8 +96,6 @@ def setup_virtual_environment():
     ensure_espeak_ng()
     print("[Setup] Virtual environment and packages are ready.")
 
-# --- Multi-Personality World Model System ---
-
 WORLD_MODELS_DIR = "world_models"
 DEFAULT_WORLD_MODEL = "default.json"
 
@@ -115,11 +104,11 @@ def load_world_model(path):
         with open(path, "r") as f:
             return json.load(f)
     else:
-        # Return a default structure if not found
         model = {
             "assistant_name": "Rockman.EXE",
             "greeting": "Online! Ready to assist!",
-            "facts": []
+            "facts": [],
+            "conversation_log": []
         }
         return model
 
@@ -143,21 +132,22 @@ def extract_facts_from_input(user_input):
             facts.append(f"User likes {like_part}")
     return facts
 
-def incorporate_facts_into_response(response, world_model):
-    user_name = None
-    user_likes = []
-    for fact in world_model["facts"]:
+def get_user_name(world_model):
+    for fact in world_model.get("facts", []):
         if fact.startswith("User name:"):
-            user_name = fact.split("User name:")[-1].strip()
-        if fact.startswith("User likes"):
-            user_likes.append(fact.split("User likes")[-1].strip())
+            return fact.split("User name:")[-1].strip()
+    return None
+
+def incorporate_facts_into_response(response, world_model):
+    user_name = get_user_name(world_model)
+    user_likes = [f.split("User likes")[-1].strip() for f in world_model.get("facts", []) if f.startswith("User likes")]
 
     if user_name and "Operator" in response:
         response = response.replace("Operator", user_name)
 
     if user_likes and random.random() < 0.4:
         liked_thing = random.choice(user_likes)
-        response += f" I remember you like {liked_thing}."
+        response += f" I remember you mentioned liking {liked_thing}."
 
     if "{assistant_name}" in response:
         response = response.replace("{assistant_name}", world_model.get("assistant_name", "Rockman.EXE"))
@@ -184,38 +174,157 @@ def detect_emotion(user_input):
 
 def prompt_for_personality_file():
     root = tk.Tk()
-    root.withdraw()  # Hide the main window
-    root.lift()  
+    root.withdraw()
+    root.lift()
     root.attributes('-topmost', True)
-
-    # Prompt the user for a personality file
-    file_path = filedialog.askopenfilename(
-        title="Select personality JSON file (cancel to use default)",
-        filetypes=[("JSON files", "*.json")]
-    )
+    choice = input("Do you want to load a previously saved session? (y/n): ").strip().lower()
+    file_path = None
+    if choice == 'y':
+        file_path = filedialog.askopenfilename(
+            title="Select previous session JSON file",
+            filetypes=[("JSON files", "*.json")]
+        )
+    else:
+        print("You can choose a personality file now or cancel for default...")
+        file_path = filedialog.askopenfilename(
+            title="Select personality JSON file (cancel to use default)",
+            filetypes=[("JSON files", "*.json")]
+        )
     root.destroy()
-
     return file_path
+
+def style_response(base_response, world_model):
+    personality_traits = world_model.get("personality_traits", [])
+    if "Stoic" in personality_traits:
+        base_response = base_response.replace("!", ".")
+    if "Sarcastic" in personality_traits and random.random() < 0.3:
+        base_response += " (Should I even be surprised?)"
+    return base_response
+
+def open_file_with_system(path):
+    path = os.path.abspath(path)
+    system = platform.system()
+    try:
+        if system == "Windows":
+            os.startfile(path)
+        elif system == "Darwin":  # macOS
+            subprocess.run(["open", path], check=False)
+        else:
+            # Linux/unix
+            open_cmds = ["xdg-open", "gio open", "gnome-open", "kde-open"]
+            opened = False
+            for cmd in open_cmds:
+                parts = cmd.split()
+                if shutil.which(parts[0]):
+                    subprocess.run(parts + [path], check=False)
+                    opened = True
+                    break
+            if not opened:
+                webbrowser.open("file://" + path)
+    except Exception as e:
+        print(f"[Error] Unable to open file {path}: {e}")
+
+def list_files_in_directory(directory):
+    if os.path.isdir(directory):
+        files = os.listdir(directory)
+        return files
+    else:
+        return None
+
+def read_file_content(path):
+    path = os.path.abspath(path)
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding='utf-8', errors='replace') as f:
+                return f.read()
+        except Exception as e:
+            print(f"[Error] Unable to read file {path}: {e}")
+            return None
+    return None
+
+def run_command(user_input, speak, world_model):
+    lowered = user_input.lower()
+
+    if lowered.startswith("open file"):
+        filename = lowered.replace("open file", "").strip()
+        if os.path.isfile(filename):
+            open_file_with_system(filename)
+            return f"Opening file {filename}."
+        else:
+            return f"I cannot find the file {filename}."
+
+    if lowered.startswith("read file"):
+        filename = lowered.replace("read file", "").strip()
+        content = read_file_content(filename)
+        if content:
+            lines = content.splitlines()
+            snippet = "\n".join(lines[:5]) if lines else "File is empty."
+            return f"Reading file {filename}:\n{snippet}"
+        else:
+            return f"I cannot read the file {filename}. Are you sure it exists?"
+
+    if "list files in" in lowered:
+        directory = lowered.split("list files in")[-1].strip()
+        files = list_files_in_directory(directory)
+        if files is not None:
+            if files:
+                return f"The files in {directory} are: " + ", ".join(files)
+            else:
+                return f"There are no files in {directory}."
+        else:
+            return f"I cannot find the directory {directory}."
+
+    if lowered.startswith("run"):
+        app_name = lowered.replace("run", "").strip()
+        try:
+            subprocess.Popen([app_name])
+            return f"Attempting to run {app_name}."
+        except Exception as e:
+            return f"Sorry, I couldn't run {app_name}. Error: {e}"
+
+    if "search web for" in lowered:
+        query = lowered.split("search web for")[-1].strip()
+        if query:
+            url = "https://www.google.com/search?q=" + query.replace(" ", "+")
+            webbrowser.open(url)
+            return f"Searching the web for {query}."
+        else:
+            return "I need something to search for."
+
+    if "check system info" in lowered:
+        info = (
+            f"System: {platform.system()}\n"
+            f"Node: {platform.node()}\n"
+            f"Release: {platform.release()}\n"
+            f"Version: {platform.version()}\n"
+            f"Machine: {platform.machine()}\n"
+            f"Processor: {platform.processor()}"
+        )
+        return info
+
+    return None
 
 def run_script():
     print("[Assistant] Running Rockman.EXE Assistant...")
 
-    # Prompt user for personality file
     chosen_file = prompt_for_personality_file()
     if not chosen_file or not os.path.exists(chosen_file):
-        # If no file selected or file doesn't exist, default to default.json
         chosen_file = os.path.join(WORLD_MODELS_DIR, DEFAULT_WORLD_MODEL)
         if not os.path.exists(chosen_file):
-            # Ensure default model is created
             default_model = {
                 "assistant_name": "Rockman.EXE",
                 "greeting": "Online! Ready to assist!",
-                "facts": []
+                "facts": [],
+                "conversation_log": []
             }
             os.makedirs(WORLD_MODELS_DIR, exist_ok=True)
             save_world_model(chosen_file, default_model)
 
     world_model = load_world_model(chosen_file)
+
+    # Ensure conversation_log key exists
+    if "conversation_log" not in world_model:
+        world_model["conversation_log"] = []
 
     import pyttsx3
     import speech_recognition as sr
@@ -225,39 +334,40 @@ def run_script():
 
     responses = {
         "excited": [
-            "Wow, that's awesome!",
+            "That’s amazing!",
             "I'm so excited to hear that!",
-            "Fantastic! Let's keep this energy going!"
+            "Fantastic! This is really great news!"
         ],
         "happy": [
-            "I'm glad you're feeling great!",
-            "That sounds wonderful! Let's keep it up!",
-            "Great to hear! How else can I help?"
+            "I'm glad you're feeling good!",
+            "That sounds wonderful. Keep it up!",
+            "Great to hear! What else is on your mind?"
         ],
         "neutral": [
             "Alright, what else can I do for you?",
-            "Understood. Let’s move forward.",
-            "Got it. Anything else you need?"
+            "Understood. Let's continue.",
+            "Got it. Anything else you’d like to share?"
         ],
         "curious": [
-            "Hmm, that's interesting. Can you tell me more?",
-            "I'm curious about that. What did you mean exactly?",
-            "That's intriguing. Would you like to expand on that?"
+            "Interesting. Could you elaborate?",
+            "I'm curious about that. Tell me more.",
+            "That's intriguing. I'd love to hear more details."
         ],
         "worried": [
-            "I'm sensing some concern. Is there something bothering you?",
-            "You seem worried. I'm here if you want to talk about it.",
-            "I notice some worry in your tone. Let’s figure this out together."
+            "I sense some concern. Want to talk it through?",
+            "You seem worried. I'm here to listen.",
+            "It’s okay to feel this way. Tell me more about what’s bothering you."
         ],
         "angry": [
-            "I can tell you're upset. Let’s take a moment to calm down.",
-            "I understand you're angry. Let’s work through this together.",
-            "I’m here to assist, even when things are tough."
+            "I can tell you're upset. Let’s slow down and understand why.",
+            "I understand you’re angry. What triggered this feeling?",
+            "It’s tough feeling that way. Let’s try to work through it."
         ]
     }
 
     def speak(text):
         assistant_name = world_model.get("assistant_name", "Rockman.EXE")
+        world_model["conversation_log"].append({"role": "assistant", "text": text})
         print(f"{assistant_name}: {text}")
         engine.say(text)
         engine.runAndWait()
@@ -272,6 +382,7 @@ def run_script():
                 audio = recognizer.listen(source)
                 user_input = recognizer.recognize_google(audio)
                 print(f"You: {user_input}")
+                world_model["conversation_log"].append({"role": "user", "text": user_input})
                 return user_input
             except sr.UnknownValueError:
                 speak("I didn't catch that. Could you repeat it?")
@@ -279,64 +390,80 @@ def run_script():
                 speak("I’m having trouble accessing the recognition service.")
         return None
 
-    def handle_command(user_input):
-        lowered = user_input.lower()
-
-        if "change personality to" in lowered:
-            speak("You chose this personality at the start. Currently, dynamic changes aren't implemented. Please restart to load a new personality.")
-            return False
-
-        if "exit" in lowered or "don't need it anymore" in lowered:
-            # Personalized goodbye if possible
-            user_name = None
-            for f in world_model["facts"]:
-                if "User name:" in f:
-                    user_name = f.split("User name:")[-1].strip()
+    # If user name not known, ask for it
+    user_name = get_user_name(world_model)
+    if not user_name:
+        speak("Hello there! I don't think I know your name yet. Could you please tell me your name?")
+        while True:
+            name_input = listen_to_user()
+            if name_input:
+                # Attempt to extract name
+                facts = extract_facts_from_input(name_input)
+                if facts:
+                    for fact in facts:
+                        if fact.startswith("User name:"):
+                            world_model["facts"].append(fact)
+                            user_name = fact.split("User name:")[-1].strip()
+                            speak(f"Nice to meet you, {user_name}!")
+                            break
+                if user_name:
                     break
-            farewell = "Logging out for the day. See you tomorrow, "
-            farewell += f"{user_name}!" if user_name else "Operator!"
-            speak(farewell)
-            return True
+                else:
+                    speak("I’m sorry, I didn’t catch your name. Please say 'My name is ...' to introduce yourself.")
 
-        if "weather" in lowered:
-            resp = "Checking the weather now... It's sunny outside!"
-            resp = incorporate_facts_into_response(resp, world_model)
-            speak(resp)
-        elif "reminder" in lowered:
-            speak("What should I remind you about?")
-        elif "play music" in lowered:
-            speak("Playing some music to match your mood!")
-        else:
-            prompt = incorporate_facts_into_response("What else can I do for you, Operator?", world_model)
-            speak(prompt)
+    else:
+        speak(f"Welcome back, {user_name}! How are you feeling today?")
 
-        return False
-
-    greeting = world_model.get("greeting", "Online! Ready to assist!")
-    speak(greeting)
+    # Ask how they're feeling if we didn't just get their name
+    if user_name and len(world_model["conversation_log"]) < 4:
+        speak("How are you feeling today?")
 
     while True:
         user_input = listen_to_user()
         if user_input:
+            lowered = user_input.lower()
+            if "exit" in lowered or "don't need it anymore" in lowered:
+                speak("Would you like to save this session’s data to a new file? Say yes or no.")
+                save_resp = listen_to_user()
+                if save_resp and "yes" in save_resp.lower():
+                    speak("Please type a filename without extension and then press enter in the terminal.")
+                    filename = input("Filename (will save as .json): ")
+                    save_path = os.path.join(WORLD_MODELS_DIR, filename + ".json")
+                    save_world_model(save_path, world_model)
+                    speak(f"Session saved as {filename}.json. Goodbye, {user_name}!")
+                else:
+                    speak(f"Goodbye, {user_name}! Have a great day!")
+                break
+
             new_facts = extract_facts_from_input(user_input)
             if new_facts:
                 for fact in new_facts:
-                    if fact not in world_model["facts"]:
+                    if fact not in world_model.get("facts", []):
                         world_model["facts"].append(fact)
-                # Save the model back to the chosen file
                 save_world_model(chosen_file, world_model)
 
+            # Try commands
+            cmd_resp = run_command(user_input, speak, world_model)
+            if cmd_resp:
+                cmd_resp = incorporate_facts_into_response(cmd_resp, world_model)
+                cmd_resp = style_response(cmd_resp, world_model)
+                speak(cmd_resp)
+                continue
+
+            # Emotion-based response
             emotion = detect_emotion(user_input)
             if emotion not in responses:
                 emotion = "neutral"
             base_response = random.choice(responses[emotion])
-            full_response = incorporate_facts_into_response(base_response, world_model)
-            speak(full_response)
+            base_response = incorporate_facts_into_response(base_response, world_model)
+            base_response = style_response(base_response, world_model)
 
-            should_exit = handle_command(user_input)
-            if should_exit:
-                break
-        # If no input, continue listening
+            # Occasionally ask a personal question to deepen "human" feel
+            user_name = get_user_name(world_model)
+            if user_name and random.random() < 0.2:
+                base_response += f" By the way, {user_name}, is there anything you’d like to share or any project you’re working on?"
+
+            speak(base_response)
 
 if __name__ == "__main__":
     if not os.path.exists("world_models"):
@@ -346,7 +473,8 @@ if __name__ == "__main__":
         default_model = {
             "assistant_name": "Rockman.EXE",
             "greeting": "Online! Ready to assist!",
-            "facts": []
+            "facts": [],
+            "conversation_log": []
         }
         save_world_model(default_path, default_model)
 
